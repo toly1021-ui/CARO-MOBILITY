@@ -428,7 +428,7 @@ function applyLang(){
 ───────────────────────────────────────────── */
 var currentStep=1, caroMap=null, selectedCar=null;
 var selectedIns=INSURANCE[0], couponDiscount=0, pointDiscount=0;
-var myReservations=[], savedCards=[];
+var myReservations=[], savedCards=[], cancelledHistory=[];
 var slideIdx=0, slideTimer=null;
 var userInfo={id:'',email:'',license:'',name:''};
 var timerHandles={};
@@ -561,17 +561,40 @@ function buildDrumData(){
 
 function drumLabel(d){
   var day=DAYS[d.getDay()];
-  return d.getDate()+'일 ('+day+')';
+  var month=d.getMonth()+1;
+  var date=d.getDate();
+  return month+'월 '+date+'일 ('+day+')';
 }
 
 function openDrumPicker(which){
   drumTarget=which;
   buildDrumData();
   var inp=document.getElementById(which==='start'?'res-start':'res-end');
-  var cur=inp&&inp.value?new Date(inp.value):new Date();
-  if(isNaN(cur)) cur=new Date();
+  var now=new Date();
+  /* 분을 10분 단위로 올림 */
+  now.setSeconds(0,0);
+  var rem=now.getMinutes()%10;
+  if(rem>0) now.setMinutes(now.getMinutes()+(10-rem));
+
+  var cur;
+  if(which==='start'){
+    cur=inp&&inp.value?new Date(inp.value):now;
+    if(isNaN(cur)) cur=now;
+  } else {
+    /* 반납 = 대여시작 + 1시간 기본 */
+    var startInp=document.getElementById('res-start');
+    var startDate=startInp&&startInp.value?new Date(startInp.value):now;
+    if(isNaN(startDate)) startDate=now;
+    cur=inp&&inp.value?new Date(inp.value):new Date(startDate.getTime()+60*60*1000);
+    if(isNaN(cur)) cur=new Date(startDate.getTime()+60*60*1000);
+    /* 최소 1시간 보장 */
+    if(cur.getTime()<startDate.getTime()+60*60*1000){
+      cur=new Date(startDate.getTime()+60*60*1000);
+    }
+  }
+
   var today=new Date(); today.setHours(0,0,0,0);
-  var diffDays=Math.round((new Date(cur.getFullYear(),cur.getMonth(),cur.getDate())-today)/86400000);
+  var diffDays=Math.round((new Date(cur.getFullYear(),cur.getMonth(),cur.getDate())-today)/(86400000));
   drumState.dateIdx=Math.max(0,Math.min(diffDays,59));
   drumState.ampmIdx=cur.getHours()<12?0:1;
   var h12=cur.getHours()%12||12;
@@ -583,13 +606,12 @@ function openDrumPicker(which){
 
   renderDrum('date', document.getElementById('drum-date-list'), drumDates.map(drumLabel), drumState.dateIdx);
   renderDrum('ampm', document.getElementById('drum-ampm-list'), drumAmpm, drumState.ampmIdx);
-  renderDrum('hour', document.getElementById('drum-hour-list'), drumHours.map(String), drumState.hourIdx);
-  renderDrum('min',  document.getElementById('drum-min-list'),  drumMins.map(function(m){return m<10?'0'+m:String(m);}), drumState.minIdx);
+  renderDrum('hour', document.getElementById('drum-hour-list'), drumHours, drumState.hourIdx);
+  renderDrum('min',  document.getElementById('drum-min-list'),  drumMins,  drumState.minIdx);
 
   var ov=document.getElementById('drum-overlay');
   if(ov){
     ov.classList.add('open');
-    /* BL 모드 드럼 스타일 */
     var isBL=!!(selectedCar&&selectedCar.isBlackLabel);
     ov.classList.toggle('bl-drum-mode', isBL);
   }
@@ -704,10 +726,33 @@ function confirmDrumPicker(){
   var h12=drumHours[drumState.hourIdx];
   var min=drumMins[drumState.minIdx];
   var hour24=h12%12+(ampm?12:0);
-  /* Date 생성자가 자정 넘어가면 자동으로 다음 날로 처리 */
-  var chosen=new Date(d.getFullYear(),d.getMonth(),d.getDate(),hour24,min,0,0);
+  var chosen=new Date(d.getFullYear(),d.getMonth(),d.getDate(),hour24,min,0);
   var pad=function(n){return n<10?'0'+n:n;};
-  var fmt=chosen.getFullYear()+'-'+pad(chosen.getMonth()+1)+'-'+pad(chosen.getDate())+'T'+pad(chosen.getHours())+':'+pad(chosen.getMinutes());
+  var fmt=chosen.getFullYear()+'-'+pad(chosen.getMonth()+1)+'-'+pad(chosen.getDate())+'T'+pad(hour24)+':'+pad(min);
+
+  /* 반납 시간이 대여 시작보다 1시간 이상 이후인지 확인 */
+  if(drumTarget==='end'){
+    var startInp=document.getElementById('res-start');
+    if(startInp&&startInp.value){
+      var startDate=new Date(startInp.value);
+      if(chosen.getTime()<startDate.getTime()+60*60*1000){
+        showToast('반납 시간은 대여 시작 후 최소 1시간 이후여야 해요!');
+        return;
+      }
+    }
+  }
+
+  /* 대여 시작 변경 시 반납 시간 자동 업데이트 */
+  if(drumTarget==='start'){
+    var endInp=document.getElementById('res-end');
+    if(endInp){
+      var newEnd=new Date(chosen.getTime()+60*60*1000);
+      var pad2=function(n){return n<10?'0'+n:n;};
+      endInp.value=newEnd.getFullYear()+'-'+pad2(newEnd.getMonth()+1)+'-'+pad2(newEnd.getDate())+'T'+pad2(newEnd.getHours())+':'+pad2(newEnd.getMinutes());
+      endInp.dispatchEvent(new Event('change'));
+    }
+  }
+
   var inputId=drumTarget==='start'?'res-start':'res-end';
   var inp=document.getElementById(inputId);
   if(inp){
@@ -734,15 +779,23 @@ document.addEventListener('DOMContentLoaded',function(){
 
 /* setupDateInputs 개선 — 화면 표시 동기화 */
 function setupDateInputs(){
-  var now=new Date(); now.setMinutes(0,0,0);
+  var now=new Date();
+  /* 분을 10분 단위로 올림 */
+  now.setSeconds(0,0);
+  var rem=now.getMinutes()%10;
+  if(rem>0) now.setMinutes(now.getMinutes()+(10-rem));
+
+  var later=new Date(now.getTime()+3600000); /* 1시간 후 */
   var pad=function(n){return n<10?'0'+n:n;};
   var fmt=function(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());};
-  var later=new Date(now.getTime()+3600000);
-  var s=document.getElementById('res-start'), e=document.getElementById('res-end');
+
+  var s=document.getElementById('res-start');
+  var e=document.getElementById('res-end');
   if(s) s.value=fmt(now);
   if(e) e.value=fmt(later);
   syncDateDisplay('start');
   syncDateDisplay('end');
+  updateDuration();
 }
 
 /* ─────────────────────────────────────────────
@@ -777,6 +830,7 @@ function _afterGoTo(screenId, next){
   if(screenId==='dev-screen') renderDevScreen();
   if(screenId==='home-screen') startSlider();
   if(screenId==='my-reservation-screen') renderMyReservations();
+  if(screenId==='usage-history-screen') renderUsageHistory();
   if(screenId==='mypage-screen') renderMyPage();
   if(screenId==='black-label-screen') renderBLCars();
   closeDrawer();
@@ -1133,6 +1187,7 @@ function handleLogin(){
     userInfo.uid  = uid||'';
     userInfo.name = name||id;
     startSessionTimer();
+    loadUserData(id);
     /* 홈 화면 텍스트 업데이트 */
     var wn=document.getElementById('home-welcome-name');
     if(wn) wn.textContent=(userInfo.name||id)+' 님, 안녕하세요 👋';
@@ -1792,6 +1847,7 @@ function handlePayment(){
   /* 주행전 사진 버튼 초기화 (새 예약 완료) */
     var pb=document.getElementById('ctrl-photo-toggle');
     if(pb){pb.removeAttribute('data-photo-done');pb.disabled=false;pb.style.opacity='';pb.style.pointerEvents='';pb.classList.remove('ctrl-sq-disabled');}
+    saveUserData();
     goTo('done-screen');
   }
 
@@ -1960,6 +2016,7 @@ function doReturnCar(){
     myReservations[ctrlResIdx].returned=true;
     myReservations[ctrlResIdx].returnedAt=new Date();
   }
+  saveUserData();
   showToast('반납이 완료되었습니다. 이용해 주셔서 감사합니다 🚗');
   setTimeout(function(){
     renderCars(); updateMapMarkers();
@@ -2390,7 +2447,7 @@ function devRenderPriceList(){
         '<div style="font-size:.64rem;color:rgba(91,200,255,.4);">'+car.fuel+(car.fuel==='전기'?' · 전기차':' · 유류')+'</div>'+
       '</div>'+
       '<input class="dev-input" id="dev-price-'+car.id+'" type="number" value="'+car.pricePerHour+'" style="width:70px;flex:none;text-align:center;" placeholder="원/h"/>'+
-      '<input class="dev-input" id="dev-km-'+car.id+'" type="number" value="'+(car.kmRate||0)+'" style="width:58px;flex:none;text-align:center;" placeholder="원/km" '+(car.fuel!=='전기'?'disabled style="width:58px;flex:none;text-align:center;opacity:.35;"':'')+'/>'; 
+      '<input class="dev-input" id="dev-km-'+car.id+'" type="number" value="'+(car.kmRate||0)+'" style="width:58px;flex:none;text-align:center;" placeholder="원/km" '+(car.fuel!=='전기'?'disabled style="width:58px;flex:none;text-align:center;opacity:.35;"':'')+'/>';
     list.appendChild(row);
   });
   /* BL 차량 구분선 */
@@ -2680,8 +2737,12 @@ function startHomeCtrlTimer(startTime, endTime){
       el.style.fontWeight='';
       el.style.color='#ff9966';
     } else if(diff>0){
-      var m2=Math.floor(diff/60000), s2=Math.floor((diff%60000)/1000);
-      el.textContent=pad(m2)+':'+pad(s2)+' 후 시작';
+      var d2=Math.floor(diff/86400000);
+      var h2=Math.floor((diff%86400000)/3600000);
+      var m2=Math.floor((diff%3600000)/60000);
+      if(d2>0) el.textContent=d2+'일 '+pad(h2)+'시간 '+pad(m2)+'분 후 시작';
+      else if(h2>0) el.textContent=pad(h2)+'시간 '+pad(m2)+'분 후 시작';
+      else el.textContent=pad(m2)+'분 후 시작';
       el.style.color='#c8a96e';
       el.style.fontWeight='';
     }
@@ -2803,6 +2864,7 @@ function confirmExtendSheet(){
     var extEl=document.getElementById('home-ctrl-extend-info');
     if(extEl) extEl.textContent='+'+fmtExtendedMins(r.extendedMins)+' 연장됨';
     renderMyReservations();
+    saveUserData();
     showToast(fmtExtendedMins(mins)+' 연장  반납: '+(e.getMonth()+1)+'/'+p(e.getDate())+' '+p(e.getHours())+':'+p(e.getMinutes()));
   } else {
     showToast(fmtExtendedMins(mins)+' 연장 완료되었습니다.');
@@ -3294,19 +3356,22 @@ function getRefundPolicy(diffMin, total){
   else if(diffMin>=180){  pct=30;  label='30% 환불';         note='3~5시간 전 취소';}
   else if(diffMin>=60){   pct=0;   label='환불 불가';         note='1~3시간 전 취소';}
   else if(diffMin>=10){   pct=0;   label='환불 불가';         note='10분~1시간 전 취소';}
-  else{                   pct=-1;  label='취소 불가';         note='10분 이내';}
+  else if(diffMin>=0){    pct=0;   label='환불 불가';         note='1시간 이내 취소';}
+  else{                   pct=0;   label='환불 불가';         note='대여 시작 후 취소';}
   var amt=pct>0?Math.round(total*pct/100):0;
   return {pct:pct, label:label, note:note, amt:amt};
 }
 
 function cancelReservation(idx){
   var r=myReservations[idx]; if(!r||r.returned) return;
+  var photoBtn=document.getElementById('ctrl-photo-toggle');
+  var photoDone=photoBtn&&photoBtn.getAttribute('data-photo-done')==='1';
+  if(ctrlResIdx===idx&&photoDone){ showToast('🚗 운행 중에는 예약 취소가 불가합니다.'); return; }
   var now=new Date();
-  var diffMin=(r.start.getTime()-now.getTime())/60000;
+  var startTime=new Date(r.start);
+  var diffMin=(startTime.getTime()-now.getTime())/60000;
   var pol=getRefundPolicy(diffMin, r.total);
-  if(pol.pct===-1){ showToast('출발 10분 이내에는 취소가 불가합니다.'); return; }
   cancelTargetIdx=idx;
-  /* 확인 모달 내용 생성 */
   var el=document.getElementById('cancel-confirm-content'); if(!el) return;
   var refundStr=pol.pct>0?pol.amt.toLocaleString()+'원 ('+pol.pct+'%)':'환불 없음';
   var btnColor=pol.pct===100?'#1d7a3a':pol.pct>=70?'#1d7a3a':pol.pct>=30?'#9a6a00':'#b23a3a';
@@ -3327,13 +3392,11 @@ function cancelReservation(idx){
       '<div style="font-size:.9rem;font-weight:700;color:'+btnColor+';margin-top:2px;">'+pol.note+' · '+pol.label+'</div>'+
       '<div style="font-size:.82rem;color:var(--text-2);margin-top:3px;">환불 예정: <strong style="color:'+btnColor+';">'+refundStr+'</strong></div>'+
     '</div>'+
-    /* 체크박스 확인 */
-    '<label id="cancel-agree-row" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.2);border-radius:var(--r);cursor:pointer;margin-bottom:12px;transition:background .2s;">'+
-      '<input type="checkbox" id="cancel-agree-chk" onchange="onCancelAgreeChange()" style="display:none;">'+
+    '<div id="cancel-agree-row" onclick="onCancelAgreeChange()" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.2);border-radius:var(--r);cursor:pointer;margin-bottom:12px;transition:background .2s;">'+
+      '<input type="checkbox" id="cancel-agree-chk" style="display:none;">'+
       '<span id="cancel-agree-box" style="width:20px;height:20px;flex-shrink:0;border:1.5px solid rgba(178,58,58,.4);border-radius:5px;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;transition:all .18s;"></span>'+
       '<span style="font-size:.82rem;font-weight:700;color:#b23a3a;line-height:1.4;">예약 취소 확인</span>'+
-    '</label>'+
-    /* 버튼: 취소 확정(좌) · 취소 안함(우) */
+    '</div>'+
     '<div style="display:flex;gap:8px;">'+
       '<button id="cancel-confirm-do-btn" onclick="doConfirmCancel()" disabled style="flex:1;padding:12px;background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.2);border-radius:var(--r);font-family:var(--font);font-size:.86rem;font-weight:700;color:rgba(178,58,58,.4);cursor:not-allowed;transition:all .2s;">예약 취소 확정</button>'+
       '<button onclick="closeCancelConfirmModalDirect()" style="flex:1;padding:12px;background:rgba(29,122,58,.08);border:1px solid rgba(29,122,58,.3);border-radius:var(--r);font-family:var(--font);font-size:.86rem;font-weight:700;color:#1d7a3a;cursor:pointer;">취소 안함</button>'+
@@ -3372,6 +3435,13 @@ function doConfirmCancel(){
   var now=new Date();
   var diffMin=(r.start.getTime()-now.getTime())/60000;
   var pol=getRefundPolicy(diffMin, r.total);
+  cancelledHistory.unshift({
+    bookNo:r.bookNo, car:r.car, ins:r.ins,
+    start:r.start, end:r.end, hrs:r.hrs, total:r.total,
+    extendedMins:r.extendedMins||0,
+    cancelledAt:new Date(), refundPct:pol.pct, refundAmt:pol.amt,
+    status:'cancelled'
+  });
   myReservations.splice(idx,1);
   cancelTargetIdx=-1;
   closeModal('cancel-confirm-modal');
@@ -3380,6 +3450,7 @@ function doConfirmCancel(){
   var msg=pol.pct>0?
     '✅ 예약 취소 완료 · '+pol.amt.toLocaleString()+'원 환불 처리됩니다.':
     '예약이 취소되었습니다. (환불 없음)';
+  saveUserData();
   showToast(msg);
 }
 window.doConfirmCancel=doConfirmCancel;
@@ -3577,11 +3648,13 @@ function saveCard(){
   ['ac-num','ac-exp','ac-cvc','ac-name'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   closeModal('add-card-modal');
   renderSavedCards();
+  saveUserData();
   showToast('카드가 등록되었습니다 💳');
 }
 function deleteCard(idx){
   savedCards.splice(idx,1);
   renderSavedCards();
+  saveUserData();
   showToast('카드가 삭제되었습니다.');
 }
 
@@ -3698,6 +3771,56 @@ function startTimer(timerId){
 /* ─────────────────────────────────────────────
    26. 유틸
 ───────────────────────────────────────────── */
+/* ─────────────────────────────────────────────
+   데이터 영속성 (로컬 저장)
+───────────────────────────────────────────── */
+function saveUserData(){
+  if(!userInfo.id) return;
+  var key='caro_data_'+userInfo.id;
+  try{
+    localStorage.setItem(key, JSON.stringify({
+      myReservations: myReservations.map(function(r){
+        return Object.assign({},r,{
+          start:r.start instanceof Date?r.start.toISOString():r.start,
+          end:r.end instanceof Date?r.end.toISOString():r.end,
+          returnedAt:r.returnedAt instanceof Date?r.returnedAt.toISOString():r.returnedAt||null
+        });
+      }),
+      cancelledHistory: cancelledHistory.map(function(r){
+        return Object.assign({},r,{
+          start:r.start instanceof Date?r.start.toISOString():r.start,
+          end:r.end instanceof Date?r.end.toISOString():r.end,
+          cancelledAt:r.cancelledAt instanceof Date?r.cancelledAt.toISOString():r.cancelledAt
+        });
+      }),
+      savedCards: savedCards
+    }));
+  }catch(e){}
+}
+
+function loadUserData(uid){
+  var key='caro_data_'+uid;
+  try{
+    var raw=localStorage.getItem(key);
+    if(!raw) return;
+    var d=JSON.parse(raw);
+    if(d.myReservations) myReservations=d.myReservations.map(function(r){
+      return Object.assign({},r,{
+        start:new Date(r.start),
+        end:new Date(r.end),
+        returnedAt:r.returnedAt?new Date(r.returnedAt):null
+      });
+    });
+    if(d.cancelledHistory) cancelledHistory=d.cancelledHistory.map(function(r){
+      return Object.assign({},r,{
+        start:new Date(r.start),
+        end:new Date(r.end),
+        cancelledAt:new Date(r.cancelledAt)
+      });
+    });
+    if(d.savedCards) savedCards=d.savedCards;
+  }catch(e){}
+}
 function val(id){ var e=document.getElementById(id); return e?e.value.trim():''; }
 
 /* ─────────────────────────────────────────────
@@ -3717,6 +3840,133 @@ window.goToPayment=goToPayment; window.toggleCardInputs=toggleCardInputs; window
 window.fmtCardNum=fmtCardNum; window.fmtCardExp=fmtCardExp; window.fmtCardCvc=fmtCardCvc;
 window.applyCoupon=applyCoupon; window.togglePoint=togglePoint;
 window.updateDuration=updateDuration; window.updatePriceSummary=updatePriceSummary;
+
+/* ─────────────────────────────────────────────
+   이용 내역
+───────────────────────────────────────────── */
+function renderUsageHistory(){
+  var list=document.getElementById('usage-history-list'); if(!list) return;
+  var all=[];
+  var now=new Date();
+  myReservations.forEach(function(r,i){
+    var st='reserved';
+    if(r.returned) st='returned';
+    else if(now>=r.start&&now<=r.end) st='active';
+    else if(now>r.end) st='overdue';
+    all.push({r:r,idx:i,status:st});
+  });
+  cancelledHistory.forEach(function(r){
+    all.push({r:r,idx:-1,status:'cancelled'});
+  });
+  all.sort(function(a,b){
+    var da=a.status==='cancelled'?a.r.cancelledAt:a.r.start;
+    var db=b.status==='cancelled'?b.r.cancelledAt:b.r.start;
+    return db-da;
+  });
+  if(!all.length){
+    list.innerHTML='<div class="empty-reservation"><div class="empty-icon">📋</div><div class="empty-text">이용 내역이 없습니다</div></div>';
+    return;
+  }
+  list.innerHTML='';
+  window.usageHistoryData=all;
+  all.forEach(function(item,i){
+    var r=item.r;
+    var stMap={
+      reserved:{label:'예약 완료',color:'#1d7a3a',bg:'rgba(29,122,58,.12)'},
+      active:  {label:'대여 중',  color:'#b23a3a',bg:'rgba(178,58,58,.12)'},
+      returned:{label:'반납 완료',color:'#888',   bg:'rgba(120,120,120,.1)'},
+      overdue: {label:'반납 필요',color:'#b23a3a',bg:'rgba(178,58,58,.12)'},
+      cancelled:{label:'취소됨',  color:'#b23a3a',bg:'rgba(178,58,58,.08)'}
+    };
+    var st=stMap[item.status]||stMap.reserved;
+    var events=[];
+    events.push({icon:'📅',label:'예약 완료',time:r.start,color:'#1d7a3a'});
+    if(item.status==='cancelled'){
+      events.push({icon:'🚫',label:'예약 취소',time:r.cancelledAt,color:'#b23a3a'});
+      if(r.refundPct>0) events.push({icon:'💰',label:'환불 예정 '+r.refundAmt.toLocaleString()+'원 ('+r.refundPct+'%)',time:null,color:'#1d7a3a'});
+      else events.push({icon:'💰',label:'환불 없음',time:null,color:'#888'});
+    } else {
+      var now2=new Date();
+      if(now2>=r.start) events.push({icon:'🚗',label:'대여 시작',time:r.start,color:'#2563a8'});
+      if(r.extendedMins) events.push({icon:'⏱',label:'시간 연장 (+'+fmtExtendedMins(r.extendedMins)+')',time:null,color:'#b07800'});
+      if(r.returned) events.push({icon:'✅',label:'반납 완료',time:r.returnedAt,color:'#1d7a3a'});
+    }
+    var evHtml=events.map(function(ev){
+      return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(0,0,0,.05);">'+
+        '<span style="font-size:.9rem;flex-shrink:0;">'+ev.icon+'</span>'+
+        '<span style="font-size:.78rem;font-weight:700;color:'+ev.color+';flex:1;">'+ev.label+'</span>'+
+        (ev.time?'<span style="font-size:.72rem;color:var(--text-m);">'+fmtDT(ev.time)+'</span>':'')+
+      '</div>';
+    }).join('');
+    var card=document.createElement('div'); card.className='my-res-card';
+    card.innerHTML=
+      '<div class="my-res-header">'+
+        '<span class="my-res-no">'+r.bookNo+'</span>'+
+        '<span class="my-res-status" style="background:'+st.bg+';color:'+st.color+'">'+st.label+'</span>'+
+      '</div>'+
+      '<div class="my-res-car-row">'+
+        '<img class="my-res-img" src="'+r.car.img+'" alt="'+getCarName(r.car)+'"/>'+
+        '<div>'+
+          '<div class="my-res-car-name">'+getCarName(r.car)+'</div>'+
+          '<div class="my-res-car-sub">'+fmtDT(r.start)+' ~ '+fmtDT(r.end)+'</div>'+
+        '</div>'+
+      '</div>'+
+      '<div style="margin:8px 0;padding:8px 12px;background:rgba(0,0,0,.03);border-radius:10px;">'+evHtml+'</div>'+
+      '<button class="detail-btn" onclick="openUsageDetail('+i+')">상세 내역 보기</button>';
+    list.appendChild(card);
+  });
+}
+window.renderUsageHistory=renderUsageHistory;
+
+function openUsageDetail(i){
+  var data=window.usageHistoryData; if(!data) return;
+  var item=data[i]; if(!item) return;
+  var r=item.r;
+  var body=document.getElementById('usage-detail-body'); if(!body) return;
+  var ins=r.ins||INSURANCE[0];
+  var insName=currentLang==='en'?ins.nameen:currentLang==='ja'?ins.nameja:currentLang==='zh'?ins.namezh:ins.name;
+  var isCancelled=item.status==='cancelled';
+  var now=new Date();
+  body.innerHTML=
+    '<img style="width:100%;height:120px;object-fit:contain;border-radius:14px;margin-bottom:12px;background:#dde2ea;" src="'+r.car.img+'" alt="'+getCarName(r.car)+'"/>'+
+    '<div style="background:rgba(240,244,250,.7);border-radius:14px;padding:12px 14px;margin-bottom:10px;">'+
+      '<div style="font-size:.7rem;font-weight:700;color:var(--text-m);margin-bottom:8px;">예약 정보</div>'+
+      '<div style="display:flex;flex-direction:column;gap:5px;font-size:.82rem;">'+
+        '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-m);">예약번호</span><strong>'+r.bookNo+'</strong></div>'+
+        '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-m);">차량</span><span>'+getCarName(r.car)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-m);">대여</span><span>'+fmtDT(r.start)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-m);">반납 예정</span><span>'+fmtDT(r.end)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-m);">이용 시간</span><span>'+r.hrs+'시간'+(r.extendedMins?' (+'+fmtExtendedMins(r.extendedMins)+' 연장)':'')+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-m);">보험</span><span>'+insName+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-m);">결제 금액</span><strong style="color:var(--accent);">'+r.total.toLocaleString()+'원</strong></div>'+
+      '</div>'+
+    '</div>'+
+    '<div style="background:rgba(240,244,250,.7);border-radius:14px;padding:12px 14px;margin-bottom:10px;">'+
+      '<div style="font-size:.7rem;font-weight:700;color:var(--text-m);margin-bottom:10px;">이용 타임라인</div>'+
+      '<div style="position:relative;padding-left:18px;border-left:2px solid rgba(0,0,0,.1);">'+
+        '<div style="margin-bottom:12px;"><span style="font-size:.8rem;font-weight:700;color:#1d7a3a;">📅 예약 완료</span><div style="font-size:.74rem;color:var(--text-m);margin-top:2px;">'+fmtDT(r.start)+'</div></div>'+
+        (!isCancelled&&now>=r.start?'<div style="margin-bottom:12px;"><span style="font-size:.8rem;font-weight:700;color:#2563a8;">🚗 대여 시작</span><div style="font-size:.74rem;color:var(--text-m);margin-top:2px;">'+fmtDT(r.start)+'</div></div>':'')+
+        (r.extendedMins?'<div style="margin-bottom:12px;"><span style="font-size:.8rem;font-weight:700;color:#b07800;">⏱ 시간 연장</span><div style="font-size:.74rem;color:var(--text-m);margin-top:2px;">+'+fmtExtendedMins(r.extendedMins)+' · 반납 변경: '+fmtDT(r.end)+'</div></div>':'')+
+        (isCancelled?'<div style="margin-bottom:12px;"><span style="font-size:.8rem;font-weight:700;color:#b23a3a;">🚫 예약 취소</span><div style="font-size:.74rem;color:var(--text-m);margin-top:2px;">'+fmtDT(r.cancelledAt)+'</div></div>':'')+
+        (r.returned?'<div><span style="font-size:.8rem;font-weight:700;color:#1d7a3a;">✅ 반납 완료</span><div style="font-size:.74rem;color:var(--text-m);margin-top:2px;">'+fmtDT(r.returnedAt)+'</div></div>':'')+
+      '</div>'+
+    '</div>'+
+    (isCancelled?
+      '<div style="background:'+(r.refundPct>0?'rgba(29,122,58,.08)':'rgba(178,58,58,.06)')+';border-radius:14px;padding:14px;border:1px solid '+(r.refundPct>0?'rgba(29,122,58,.2)':'rgba(178,58,58,.2)')+';text-align:center;">'+
+        '<div style="font-size:.8rem;font-weight:700;color:'+(r.refundPct>0?'#1d7a3a':'#b23a3a')+';">환불 내역</div>'+
+        '<div style="font-size:1rem;font-weight:700;margin-top:4px;color:'+(r.refundPct>0?'#1d7a3a':'#888')+';"> '+(r.refundPct>0?r.refundAmt.toLocaleString()+'원 ('+r.refundPct+'%) 환불 예정':'환불 없음')+'</div>'+
+      '</div>'
+    :'');
+  openModal('usage-detail-modal');
+}
+window.openUsageDetail=openUsageDetail;
+
+function closeUsageDetail(e){
+  if(e&&e.target!==document.getElementById('usage-detail-modal')) return;
+  closeModal('usage-detail-modal');
+}
+window.closeUsageDetail=closeUsageDetail;
+
 window.openResDetail=openResDetail; window.closeResDetail=closeResDetail;
 window.openHomeCtrl=openHomeCtrl; window.closeHomeCtrl=closeHomeCtrl; window.closeHomeCtrlDirect=closeHomeCtrlDirect;
 window.openEventDetail=openEventDetail; window.closeEventDetail=closeEventDetail;
@@ -3790,6 +4040,7 @@ var _backMap = {
   'signup-screen': 'main-screen',
   'find-screen': 'main-screen',
   'cs-screen': 'home-screen',
+  'usage-history-screen': 'home-screen',
   'event-screen': 'home-screen',
   'mypage-screen': 'home-screen',
   'my-reservation-screen': 'home-screen',

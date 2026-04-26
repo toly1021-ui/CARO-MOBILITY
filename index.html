@@ -398,6 +398,17 @@ if(window.navigator.standalone){
   <div id="bl-detail-content"></div>
 </div>
 
+<!-- ══ USAGE HISTORY ══ -->
+<div id="usage-history-screen" class="screen">
+  <div class="metal-bg"></div>
+  <div class="home-header">
+    <button class="brand-logo sm brand-home-btn" onclick="goTo('home-screen')">CARO MOBILITY</button>
+  </div>
+  <div class="myres-title-row">
+    <span class="myres-main-title">이용 내역</span>
+  </div>
+  <div class="myres-body" id="usage-history-list"></div>
+</div>
 <!-- ══ MY RESERVATION ══ -->
 <div id="my-reservation-screen" class="screen">
   <div class="metal-bg"></div>
@@ -415,6 +426,19 @@ if(window.navigator.standalone){
   </div>
 </div>
 
+<!-- ══ USAGE DETAIL MODAL ══ -->
+<div id="usage-detail-modal" class="modal-overlay" onclick="closeUsageDetail(event)">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">이용 상세 내역</span>
+      <button class="modal-close" onclick="closeModal('usage-detail-modal')">✕</button>
+    </div>
+    <div class="modal-body" id="usage-detail-body"></div>
+    <div class="modal-footer">
+      <button class="submit-btn small" onclick="closeModal('usage-detail-modal')">확인</button>
+    </div>
+  </div>
+</div>
 <!-- ══ RESERVATION DETAIL MODAL ══ -->
 <div id="res-detail-modal" class="modal-overlay" onclick="closeResDetail(event)">
   <div class="modal-box">
@@ -924,7 +948,7 @@ if(window.navigator.standalone){
   <div class="hmenu-divider"></div>
 
   <!-- 메뉴 항목 -->
-  <button class="hmenu-item" onclick="closeHomeMenu();goTo('my-reservation-screen')">
+  <button class="hmenu-item" onclick="closeHomeMenu();goTo('usage-history-screen')">
     <span class="hmenu-item-icon">📋</span>
     <span class="hmenu-item-label">이용내역</span>
     <span class="hmenu-item-arrow">›</span>
@@ -1460,7 +1484,7 @@ if(window.navigator.standalone){
 </div>
 
 <!-- ══ 예약 취소 확인 모달 ══ -->
-<div class="modal-overlay" id="cancel-confirm-modal" onclick="closeCancelConfirmModal(event)">
+<div class="modal-overlay" id="cancel-confirm-modal" onclick="closeCancelConfirmModal(event)" style="z-index:9999;">
   <div class="modal-box" style="padding:0;" id="cancel-confirm-box">
     <div class="modal-header">
       <span class="modal-title">예약 취소 확인</span>
