@@ -502,6 +502,21 @@ document.addEventListener('DOMContentLoaded', function(){
       if(shortcut) window._pendingShortcut = shortcut;
     }, 3000);
 
+  /* 토스페이먼츠 결제 성공 처리 */
+  var urlParams2=new URLSearchParams(window.location.search);
+  if(urlParams2.get('payment')==='success'){
+    var bookNo2=urlParams2.get('bookNo')||('CR'+Date.now().toString().slice(-8));
+    var pd2=window._payData||{};
+    if(pd2.car){
+      myReservations.unshift({
+        bookNo:bookNo2, car:pd2.car, ins:pd2.ins||INSURANCE[0],
+        start:pd2.start, end:pd2.end, hrs:pd2.hrs, total:pd2.total
+      });
+      saveUserData();
+    }
+    setTimeout(function(){ goTo('done-screen',true); },3000);
+    history.replaceState({},'',window.location.pathname);
+  }
   setupDateInputs();
   updateHomeMenuBtn('splash-screen');
 
@@ -1806,50 +1821,27 @@ function toggleCardInputs(){
 }
 
 function handlePayment(){
-  var m=document.querySelector('input[name="pay"]:checked');
-  if(!m){ showToast('결제 수단을 선택해 주세요.'); return; }
-  if(m.value==='card'){
-    var cn=val('card-num').replace(/\s/g,'');
-    var ce=val('card-exp').replace(/\s\/\s/g,'').replace(/\//g,'');
-    var cv=val('card-cvc');
-    if(cn.length<16){ showToast('카드 번호 16자리를 입력해 주세요.'); return; }
-    if(ce.length<4){ showToast('유효기간을 MM/YY 형식으로 입력해 주세요.'); return; }
-    var mm=parseInt(ce.slice(0,2));
-    if(mm<1||mm>12){ showToast('유효기간의 월이 올바르지 않습니다 (01~12).'); return; }
-    if(cv.length<3){ showToast('CVC 3자리를 입력해 주세요.'); return; }
-  }
   var pd=window._payData||{};
   var car=pd.car||selectedCar, ins=pd.ins||selectedIns||INSURANCE[0];
   var hrs=pd.hrs||0, total=pd.total||0;
-  /* Date 객체 보장 */
   var startDt=pd.start instanceof Date?pd.start:(pd.start?new Date(pd.start):null);
   var endDt=pd.end instanceof Date?pd.end:(pd.end?new Date(pd.end):null);
   if(!car||!startDt||!endDt||isNaN(startDt)||isNaN(endDt)){
     showToast('예약 정보가 올바르지 않습니다. 다시 시도해 주세요.'); return;
   }
   var bookNo='CR'+Date.now().toString().slice(-8);
-  var insName=currentLang==='en'?ins.nameen:currentLang==='ja'?ins.nameja:currentLang==='zh'?ins.namezh:ins.name;
-  var dc=document.getElementById('done-card');
-  if(dc) dc.innerHTML=
-    '<img class="done-car-img" src="'+car.img+'" alt="'+getCarName(car)+'"/>'+
-    '<div class="done-info">'+
-      '<div class="done-info-row"><span class="di-label">예약번호</span><span>'+bookNo+'</span></div>'+
-      '<div class="done-info-row"><span class="di-label">차량</span><span>'+getCarName(car)+'</span></div>'+
-      '<div class="done-info-row"><span class="di-label">연료</span><span>'+(car.fuel||'전기')+'</span></div>'+
-      '<div class="done-info-row"><span class="di-label">대여</span><span>'+fmtDT(startDt)+'</span></div>'+
-      '<div class="done-info-row"><span class="di-label">반납</span><span>'+fmtDT(endDt)+' ('+hrs+'h)</span></div>'+
-      '<div class="done-info-row"><span class="di-label">면책</span><span>'+insName+'</span></div>'+
-      '<div class="done-info-row"><span class="di-label">결제</span><span>'+total.toLocaleString()+'원</span></div>'+
-    '</div>';
-  myReservations.unshift({bookNo:bookNo,car:car,ins:ins,start:startDt,end:endDt,hrs:hrs,total:total});
-  /* 예약 카드 입력 초기화 */
-  ['card-num','card-exp','card-cvc'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
-  /* 주행전 사진 버튼 초기화 (새 예약 완료) */
-    var pb=document.getElementById('ctrl-photo-toggle');
-    if(pb){pb.removeAttribute('data-photo-done');pb.disabled=false;pb.style.opacity='';pb.style.pointerEvents='';pb.classList.remove('ctrl-sq-disabled');}
-    saveUserData();
-    goTo('done-screen');
-  }
+  var tossPayments=TossPayments('test_ck_6bJXmgo28eByJonkYwBE3LAnGKWx');
+  tossPayments.requestPayment('카드',{
+    amount: total,
+    orderId: bookNo,
+    orderName: getCarName(car)+' 대여',
+    customerName: userInfo.name||userInfo.id||'고객',
+    successUrl: window.location.href.split('?')[0]+'?payment=success&bookNo='+bookNo,
+    failUrl: window.location.href.split('?')[0]+'?payment=fail',
+  }).catch(function(err){
+    if(err.code!=='USER_CANCEL') showToast('결제 오류: '+err.message);
+  });
+}
 
 /* ─────────────────────────────────────────────
    17. 예약 확인
